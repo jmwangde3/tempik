@@ -19,23 +19,17 @@ database_id = ""
 # A `[email]` table here is ignored by wrangler ("Unexpected fields: email").
 
 # ---- Custom domain routes ----
-# Web UI: https://example.com (primary)
+# CHANGE THIS to your own domain
 [[routes]]
-pattern = "example.com"
+pattern = "tempik.YOURDOMAIN.com"
 custom_domain = true
 
-# Alias entry: https://tempik.example.com
-# Uses a Worker route (not custom domain) because a proxied DNS record
-# already exists for this hostname and would conflict with a custom domain.
-[[routes]]
-pattern = "tempik.example.com/*"
-zone_name = "example.com"
-
 # ---- Environment variables ----
+# CHANGE THESE to your own domain
 [vars]
 APP_NAME = "Tempik"
-MAIL_DOMAIN = "example.com"
-WEB_HOST = "example.com"
+MAIL_DOMAIN = "YOURDOMAIN.com"
+WEB_HOST = "tempik.YOURDOMAIN.com"
 # Comma-separated MAIL_DOMAIN is supported, e.g. "a.com,b.com"
 # Inboxes one session may hold at once.
 MAX_INBOXES_PER_SESSION = "50"

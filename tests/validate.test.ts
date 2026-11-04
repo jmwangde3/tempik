@@ -63,7 +63,7 @@ describe('isValidSessionId', () => {
 });
 
 describe('normalizeDomain', () => {
-  const allowed = ['example.com', 'payin.my.id'];
+  const allowed = ['example.com', 'mail.example.org'];
 
   it('matches case-insensitively and ignores padding', () => {
     expect(normalizeDomain('EXAMPLE.COM ', allowed)).toBe('example.com');

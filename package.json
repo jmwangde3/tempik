@@ -9,7 +9,8 @@
     "db:migrate": "wrangler d1 execute tempik-db --file=src/db/schema.sql",
     "db:local": "wrangler d1 execute tempik-db --local --file=src/db/schema.sql",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "deploy:local": "wrangler deploy --config wrangler.local.toml"
   },
   "dependencies": {
     "hono": "^4.4.0",

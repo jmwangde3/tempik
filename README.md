@@ -119,6 +119,17 @@ Email Routing rule points at it (Step 7b). Wrangler ignores a top-level `[email]
 - `YOURDOMAIN.com` → your actual domain (e.g. `example.com`)
 - `tempik.YOURDOMAIN.com` → the subdomain for the web UI
 
+**Keeping deployment values out of git.** The committed `wrangler.toml` only holds
+placeholders. If you would rather not publish your domain and D1 id, put the real values in
+`wrangler.local.toml` (already in `.gitignore`) and deploy with:
+
+```bash
+npx wrangler deploy --config wrangler.local.toml
+```
+
+A plain `npx wrangler deploy` would read the placeholder file — with an empty `database_id` and a
+domain that is not in your account — so use the `--config` form whenever a local file exists.
+
 ---
 
 ## Step 4 — Create the D1 database
