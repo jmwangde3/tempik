@@ -39,13 +39,24 @@ const SECOND = [
   'mustika', 'nirmala', 'bentala', 'gerhana', 'kirana', 'mahkota', 'mentari', 'nusantara', 'purnama', 'sejati',
 ];
 
+/**
+ * `Math.random()` is seeded per isolate and not meant to be unpredictable.
+ * Addresses only have ~2M combinations, so a guessable sequence makes
+ * enumeration (and therefore someone else's mail) cheaper than it should be.
+ */
+function randomInt(max: number): number {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return Math.floor((buf[0] / 0x100000000) * max);
+}
+
 function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
+  return arr[randomInt(arr.length)];
 }
 
 function randomLocalPart(): string {
-  const useNumber = Math.random() < 0.8;
-  const suffix = useNumber ? String(Math.floor(Math.random() * 90) + 10) : '';
+  const useNumber = randomInt(10) < 8;
+  const suffix = useNumber ? String(randomInt(90) + 10) : '';
   return `${pick(FIRST)}${pick(SECOND)}${suffix}`;
 }
 

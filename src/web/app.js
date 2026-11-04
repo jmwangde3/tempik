@@ -17,11 +17,14 @@ const appSubtitle = document.getElementById('appSubtitle');
 let appConfig = {
   appName: 'Tempik',
   mailDomain: 'example.com',
-  webHost: 'tempik.example.com'
+  mailDomains: ['example.com'],
+  webHost: 'tempik.example.com',
+  maxInboxesPerSession: 20
 };
 
 const SESSION_KEY = 'tempik_session_id';
 let sessionId = localStorage.getItem(SESSION_KEY) || '';
+let pollTimer = null;
 
 async function fetchJson(url, options = {}) {
   const headers = {
@@ -37,19 +40,96 @@ async function fetchJson(url, options = {}) {
     ...options,
     headers
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const payload = await res.json();
+      if (payload && payload.error) message = payload.error;
+    } catch {
+      /* keep the status line */
+    }
+    throw new Error(message);
+  }
   return res.json();
+}
+
+/**
+ * The API returns ISO-8601 UTC. Older rows may still look like
+ * "2026-11-04 13:26:32", which browsers parse as *local* time — append the
+ * missing zone so legacy values are not shifted by the viewer's offset.
+ */
+function parseTimestamp(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const naive = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(raw);
+  const date = new Date(naive ? `${raw.replace(' ', 'T')}Z` : raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function emptyState(icon, title, subtitle) {
+  const wrap = document.createElement('div');
+  wrap.className = 'empty-state';
+
+  const iconEl = document.createElement('div');
+  iconEl.className = 'icon';
+  iconEl.textContent = icon;
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'title';
+  titleEl.textContent = title;
+
+  const subEl = document.createElement('div');
+  subEl.className = 'sub';
+  subEl.textContent = subtitle;
+
+  wrap.append(iconEl, titleEl, subEl);
+  return wrap;
+}
+
+function renderMessages(messages) {
+  messageCount.textContent = `${messages.length} messages`;
+
+  if (!messages.length) {
+    messageList.replaceChildren(
+      emptyState('✉️', 'Inbox empty', 'Emails sent to this address will appear here.')
+    );
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  messages.forEach((msg) => {
+    const item = document.createElement('div');
+    item.className = 'message-item';
+
+    const meta = document.createElement('div');
+    meta.className = 'message-meta';
+    const when = parseTimestamp(msg.received_at);
+    meta.textContent = `From: ${msg.from_address}${when ? ` • ${when.toLocaleString()}` : ''}`;
+
+    const subject = document.createElement('strong');
+    subject.textContent = msg.subject || '(no subject)';
+
+    const body = document.createElement('p');
+    // textContent, never innerHTML: senders control every one of these fields.
+    body.textContent = msg.body || '';
+
+    item.append(meta, subject, body);
+    fragment.appendChild(item);
+  });
+
+  messageList.replaceChildren(fragment);
 }
 
 async function loadConfig() {
   appConfig = await fetchJson('/api/config', { headers: {} });
   document.title = appConfig.appName;
   appTitle.textContent = appConfig.appName;
-  appSubtitle.textContent = `Disposable inbox for ${appConfig.mailDomain}`;
+
+  const domains = appConfig.mailDomains || [appConfig.mailDomain];
+  appSubtitle.textContent = `Disposable inbox for ${domains.join(', ')}`;
   localPartInput.placeholder = `username atau kosongkan untuk random @${appConfig.mailDomain}`;
 
-  // Populate domain selector
-  const domains = appConfig.mailDomains || [appConfig.mailDomain];
   domainSelect.innerHTML = '';
   domains.forEach((d) => {
     const opt = document.createElement('option');
@@ -76,8 +156,10 @@ async function loadInboxes(selectedAddress) {
     opt.textContent = 'Belum ada inbox';
     inboxSelect.appendChild(opt);
     currentInbox.textContent = 'No inbox selected';
-    messageList.innerHTML = '<div class="empty-state"><div class="icon">📬</div><div class="title">No inboxes yet</div><div class="sub">Click <b>New</b> to create a disposable email address.</div></div>';
     messageCount.textContent = '0 messages';
+    messageList.replaceChildren(
+      emptyState('📬', 'No inboxes yet', 'Click New to create a disposable email address.')
+    );
     return;
   }
 
@@ -100,20 +182,7 @@ async function loadMessages() {
   if (!address) return;
   currentInbox.textContent = address;
   const messages = await fetchJson(`/api/inboxes/${encodeURIComponent(address)}/messages`);
-  messageCount.textContent = `${messages.length} messages`;
-
-  if (!messages.length) {
-    messageList.innerHTML = '<div class="empty-state"><div class="icon">✉️</div><div class="title">Inbox empty</div><div class="sub">Emails sent to this address will appear here.</div></div>';
-    return;
-  }
-
-  messageList.innerHTML = messages.map((msg) => `
-    <div class="message-item">
-      <div class="message-meta">From: ${msg.from_address} • ${new Date(msg.received_at).toLocaleString()}</div>
-      <strong>${msg.subject}</strong>
-      <p>${msg.body}</p>
-    </div>
-  `).join('');
+  renderMessages(messages);
 }
 
 function showToast(text) {
@@ -125,46 +194,81 @@ function showToast(text) {
   setTimeout(() => { el.classList.add('fadeout'); setTimeout(() => el.remove(), 200); }, 1800);
 }
 
+function reportError(err) {
+  console.error(err);
+  showToast(`⚠️ ${err.message}`);
+}
+
 copyBtn.addEventListener('click', async () => {
   if (!inboxSelect.value) return;
   await navigator.clipboard.writeText(inboxSelect.value);
   showToast('📋 Copied to clipboard');
 });
 
-refreshBtn.addEventListener('click', loadMessages);
+refreshBtn.addEventListener('click', () => {
+  loadMessages().catch(reportError);
+});
+
 newBtn.addEventListener('click', () => newBox.classList.toggle('hidden'));
-inboxSelect.addEventListener('change', loadMessages);
+inboxSelect.addEventListener('change', () => {
+  loadMessages().catch(reportError);
+});
 
 deleteBtn.addEventListener('click', async () => {
   if (!inboxSelect.value) return;
   if (!confirm(`Delete inbox ${inboxSelect.value}?`)) return;
   const target = inboxSelect.value;
-  await fetchJson(`/api/inboxes/${encodeURIComponent(target)}`, { method: 'DELETE' });
-  await loadInboxes();
+  try {
+    await fetchJson(`/api/inboxes/${encodeURIComponent(target)}`, { method: 'DELETE' });
+    await loadInboxes();
+  } catch (err) {
+    reportError(err);
+  }
 });
 
 createCustomBtn.addEventListener('click', async () => {
   const localPart = localPartInput.value.trim();
   const domain = domainSelect.value;
-  const inbox = await fetchJson('/api/inboxes', {
-    method: 'POST',
-    body: JSON.stringify({ localPart, domain })
-  });
-  localPartInput.value = '';
-  await loadInboxes(inbox.address);
+  try {
+    const inbox = await fetchJson('/api/inboxes', {
+      method: 'POST',
+      body: JSON.stringify({ localPart, domain })
+    });
+    localPartInput.value = '';
+    await loadInboxes(inbox.address);
+  } catch (err) {
+    reportError(err);
+  }
 });
 
 createRandomBtn.addEventListener('click', async () => {
   const domain = domainSelect.value;
-  const inbox = await fetchJson('/api/inboxes', {
-    method: 'POST',
-    body: JSON.stringify({ domain })
-  });
-  localPartInput.value = '';
-  await loadInboxes(inbox.address);
+  try {
+    const inbox = await fetchJson('/api/inboxes', {
+      method: 'POST',
+      body: JSON.stringify({ domain })
+    });
+    localPartInput.value = '';
+    await loadInboxes(inbox.address);
+  } catch (err) {
+    reportError(err);
+  }
 });
 
-Promise.all([loadConfig(), ensureSession()]).then(() => loadInboxes()).catch((err) => {
-  console.error(err);
-  messageList.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><div class="title">Connection error</div><div class="sub">${err.message}</div></div>`;
-});
+// Temp mail is a watching game: without a poll the inbox looks broken until
+// the user hits Refresh.
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(() => {
+    if (document.hidden || !inboxSelect.value) return;
+    loadMessages().catch(() => {});
+  }, 10000);
+}
+
+Promise.all([loadConfig(), ensureSession()])
+  .then(() => loadInboxes())
+  .then(() => startPolling())
+  .catch((err) => {
+    console.error(err);
+    messageList.replaceChildren(emptyState('⚠️', 'Connection error', err.message));
+  });

@@ -47,14 +47,57 @@ export async function getSessionInboxes(db: D1Database, sessionId: string): Prom
     .then((r) => r.results);
 }
 
+export async function countSessionInboxes(db: D1Database, sessionId: string): Promise<number> {
+  const row = await db
+    .prepare('SELECT COUNT(*) AS n FROM session_inboxes WHERE session_id = ?')
+    .bind(sessionId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
+ * How many sessions other than this one have the address linked.
+ *
+ * `POST /api/inboxes` used to attach any existing address to the caller, so
+ * knowing (or guessing) an address was enough to read its mail. Addresses are
+ * short word pairs, so enumeration is realistic.
+ */
+export async function countOtherSessionsForInbox(
+  db: D1Database,
+  address: string,
+  sessionId: string
+): Promise<number> {
+  const row = await db
+    .prepare(
+      'SELECT COUNT(*) AS n FROM session_inboxes WHERE inbox_address = ? AND session_id <> ?'
+    )
+    .bind(address, sessionId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
 // ---- Messages ----
 
-export async function getMessages(db: D1Database, inboxAddress: string): Promise<Message[]> {
+/**
+ * Explicit column list: `SELECT *` would return whatever is added later, and
+ * the rows carry the full body. `limit` keeps one spam-flooded inbox from
+ * turning a poll into a multi-megabyte response.
+ */
+export async function getMessages(
+  db: D1Database,
+  inboxAddress: string,
+  limit = 50,
+  offset = 0
+): Promise<Message[]> {
   return db
     .prepare(
-      'SELECT * FROM messages WHERE inbox_address = ? ORDER BY received_at DESC'
+      `SELECT id, inbox_address, from_address, subject, body, received_at
+         FROM messages
+        WHERE inbox_address = ?
+        ORDER BY received_at DESC
+        LIMIT ? OFFSET ?`
     )
-    .bind(inboxAddress)
+    .bind(inboxAddress, limit, offset)
     .all<Message>()
     .then((r) => r.results);
 }
@@ -119,4 +162,64 @@ export async function isInboxInSession(
     .bind(sessionId, address)
     .first();
   return !!row;
+}
+
+// ---- Retention ----
+
+export interface PurgeResult {
+  messages: number;
+  inboxes: number;
+  sessions: number;
+}
+
+/**
+ * Nothing ever deleted a row: `DELETE /api/inboxes/:address` only removes the
+ * session link, and every inbox ever created (plus every message ever received)
+ * stayed in D1 forever. Left alone the database grows without bound.
+ *
+ * Order matters because foreign keys are enforced: links → messages → inboxes,
+ * and an inbox/ session is only dropped once nothing references it.
+ */
+export async function purgeOldData(db: D1Database, retentionDays: number): Promise<PurgeResult> {
+  const days = Math.max(1, Math.floor(retentionDays));
+  const cutoff = `-${days} days`;
+
+  const messages = await db
+    .prepare("DELETE FROM messages WHERE received_at < datetime('now', ?)")
+    .bind(cutoff)
+    .run();
+
+  await db
+    .prepare(
+      `DELETE FROM session_inboxes
+        WHERE inbox_address IN (SELECT address FROM inboxes WHERE created_at < datetime('now', ?))
+          AND inbox_address NOT IN (SELECT inbox_address FROM messages)`
+    )
+    .bind(cutoff)
+    .run();
+
+  const inboxes = await db
+    .prepare(
+      `DELETE FROM inboxes
+        WHERE created_at < datetime('now', ?)
+          AND address NOT IN (SELECT inbox_address FROM messages)
+          AND address NOT IN (SELECT inbox_address FROM session_inboxes)`
+    )
+    .bind(cutoff)
+    .run();
+
+  const sessions = await db
+    .prepare(
+      `DELETE FROM sessions
+        WHERE created_at < datetime('now', ?)
+          AND id NOT IN (SELECT session_id FROM session_inboxes)`
+    )
+    .bind(cutoff)
+    .run();
+
+  return {
+    messages: messages.meta.changes ?? 0,
+    inboxes: inboxes.meta.changes ?? 0,
+    sessions: sessions.meta.changes ?? 0,
+  };
 }
