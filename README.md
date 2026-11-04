@@ -85,10 +85,7 @@ binding = "DB"
 database_name = "tempik-db"
 database_id = ""
 
-# Email Worker
-[email]
-action = "process"
-
+# Email Worker — no config block needed; see the note below
 # Custom domain — CHANGE THIS to your own domain
 [[routes]]
 pattern = "tempik.YOURDOMAIN.com"
@@ -99,6 +96,12 @@ custom_domain = true
 APP_NAME = "Tempik"
 MAIL_DOMAIN = "YOURDOMAIN.com"
 WEB_HOST = "tempik.YOURDOMAIN.com"
+MAX_INBOXES_PER_SESSION = "50"   # inboxes one browser session may hold
+RETENTION_DAYS = "7"             # data older than this is purged nightly
+
+# Retention sweep
+[triggers]
+crons = ["17 3 * * *"]
 
 # Static assets (don't change)
 [assets]
@@ -107,6 +110,10 @@ directory = "./src/web"
 [observability]
 enabled = true
 ```
+
+**No `[email]` block is required.** A Worker that exports `email()` receives mail as soon as the
+Email Routing rule points at it (Step 7b). Wrangler ignores a top-level `[email]` table and prints
+`Unexpected fields found in top-level field: email` if one is present.
 
 **All three `vars` + the routes `pattern` must be updated:**
 - `YOURDOMAIN.com` → your actual domain (e.g. `example.com`)
@@ -256,19 +263,24 @@ tempik/
 ├── tsconfig.json
 ├── .gitignore
 └── src/
-    ├── index.ts               # Entry point: fetch() + email() handlers
+    ├── index.ts               # Entry point: fetch() + email() + scheduled()
     ├── email-handler.ts       # Parses inbound email via PostalMime → D1
+    ├── maintenance.ts         # Cron: purge data past RETENTION_DAYS
     ├── api/
     │   └── routes.ts          # Hono router: /api/config, /api/session, /api/inboxes, /api/messages
     ├── db/
     │   ├── schema.sql         # D1 tables (inboxes, messages, sessions, session_inboxes)
     │   └── queries.ts         # Typed query functions
     ├── utils/
-    │   └── random-address.ts  # Human-like random email generator
+    │   ├── random-address.ts  # Human-like random email generator
+    │   ├── html-to-text.ts    # Flattens HTML mail to text (no innerHTML anywhere)
+    │   ├── time.ts            # SQLite timestamps → ISO-8601 UTC
+    │   └── validate.ts        # local-part / domain / session-id rules
     └── web/
         ├── index.html         # Frontend UI
         ├── app.js             # Frontend logic (vanilla JS)
         └── styles.css         # Dark theme styles
+tests/                         # Vitest unit tests (no network, no Worker runtime)
 ```
 
 ---
@@ -284,6 +296,56 @@ tempik/
 | **Static hosting** | Cloudflare Workers Assets (edge CDN) |
 | **Language** | TypeScript |
 | **CLI** | Wrangler v4 |
+| **Tests** | Vitest |
+
+---
+
+## Data retention
+
+Nothing used to delete a row: `DELETE /api/inboxes/:address` only unlinks the
+inbox from your session, and every message ever received stayed in D1 forever.
+
+A cron trigger now purges data older than `RETENTION_DAYS` (default 7) every
+night at 03:17 UTC. It removes messages first, then inboxes that no longer have
+messages, then sessions with no remaining links — respecting the foreign keys.
+
+Run the sweep on demand:
+
+```bash
+npx wrangler d1 execute tempik-db --remote \
+  --command "DELETE FROM messages WHERE received_at < datetime('now','-7 days');"
+```
+
+Changing `RETENTION_DAYS` only affects the next scheduled run, and a shorter
+window will delete mail that a long-running automation still expects.
+
+---
+
+## Development
+
+```bash
+npm install
+npx wrangler d1 execute tempik-db --local --file=src/db/schema.sql
+npm run dev          # http://localhost:8787
+npm test             # Vitest: validation, HTML flattening, timestamp handling
+```
+
+`npm test` is plain Node — no Worker runtime, no network, no Cloudflare account.
+It covers the parts that were actually broken: address validation, the
+HTML-to-text conversion that keeps mail bodies inert, and UTC timestamp
+normalisation.
+
+**Invariants worth keeping** (each is a bug that already happened):
+
+1. The web UI must never assign untrusted strings to `innerHTML` — `from`,
+   `subject` and `body` are all attacker-controlled. Use `textContent`.
+2. Bodies are stored as plain text; `htmlToText()` is what makes that safe.
+3. Timestamps leaving the API are ISO-8601 with `Z`, otherwise browsers read
+   D1's UTC strings as local time.
+4. `POST /api/inboxes` must `ensureSession()` before linking, or the foreign key
+   on `session_inboxes.session_id` answers 500.
+5. Only unowned addresses may be claimed; otherwise knowing an address is
+   equivalent to reading its mail.
 
 ---
 
@@ -313,7 +375,9 @@ Should show `*.ns.cloudflare.com`. Propagation can take up to 24 hours after cha
 
 ### "Unexpected fields found in top-level field: email"
 
-This is a known wrangler warning — it's cosmetic. The `[email]` config works fine. Cloudflare is still stabilizing the Email Worker integration.
+You have a `[email]` block in `wrangler.toml`. It does nothing — wrangler ignores it, and the
+warning is how it tells you. Delete the block. Inbound mail depends only on two things: the
+Worker exports `email()`, and the Email Routing rule points at that Worker.
 
 ### Wrangler version mismatch
 

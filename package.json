@@ -7,7 +7,9 @@
     "deploy": "wrangler deploy",
     "db:create": "wrangler d1 create tempik-db",
     "db:migrate": "wrangler d1 execute tempik-db --file=src/db/schema.sql",
-    "db:local": "wrangler d1 execute tempik-db --local --file=src/db/schema.sql"
+    "db:local": "wrangler d1 execute tempik-db --local --file=src/db/schema.sql",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "hono": "^4.4.0",
@@ -16,6 +18,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250509.0",
     "typescript": "^5.5.0",
+    "vitest": "^2.1.9",
     "wrangler": "^4.105.0"
   }
 }

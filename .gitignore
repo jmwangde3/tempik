@@ -4,3 +4,6 @@ dist/
 *.log
 .env
 .DS_Store
+
+.vite-cache/
+.tmp/
