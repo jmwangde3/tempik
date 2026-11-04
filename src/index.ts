@@ -2,17 +2,20 @@ import api from './api/routes';
 import { handleEmail } from './email-handler';
 import type { EmailHandlerEnv } from './email-handler';
 import type { ApiEnv } from './api/routes';
+import { runMaintenance } from './maintenance';
+import type { MaintenanceEnv } from './maintenance';
 
 /**
  * Tempik - Disposable Temp Mail on Cloudflare Workers
  *
  * Handles:
- * - fetch()  → API routes (static files served via Cloudflare Assets)
- * - email()  → inbound email processing via Cloudflare Email Worker
+ * - fetch()     → API routes (static files served via Cloudflare Assets)
+ * - email()     → inbound email processing via Cloudflare Email Worker
+ * - scheduled() → retention sweep for old messages/inboxes/sessions
  */
 
 // Combined env bindings
-export interface Env extends ApiEnv, EmailHandlerEnv {}
+export interface Env extends ApiEnv, EmailHandlerEnv, MaintenanceEnv {}
 
 export default {
   /**
@@ -40,5 +43,12 @@ export default {
    */
   async email(message: ForwardableEmailMessage, env: Env, _ctx: ExecutionContext): Promise<void> {
     await handleEmail(message, env);
+  },
+
+  /**
+   * Cron handler - deletes data past its retention window.
+   */
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runMaintenance(env));
   },
 };
